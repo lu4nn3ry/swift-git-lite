@@ -42,9 +42,12 @@ sudo sh scripts/fix_libexpat.sh
 
 ### Option B: Manual Commands
 
-Execute the following on the iOS device as `root` (or with `sudo`):
+Execute the following on the iOS device as `root` (or with `sudo`). The temporary file is created with `mktemp` — never use a fixed path in `/tmp`, which is vulnerable to symlink pre-planting (CWE-59) and TOCTOU swaps (CWE-367) while running as root:
 
 ```sh
+# 0. Create a private temporary file (secure alternative to a fixed /tmp path)
+TMP_DYLIB="$(mktemp /tmp/libexpat.XXXXXXXX)"
+
 # 1. Compile the arm64 re-export shim
 /var/jb/usr/bin/clang \
   -isysroot /var/jb/usr/share/SDKs/iPhoneOS.sdk \
@@ -52,16 +55,16 @@ Execute the following on the iOS device as `root` (or with `sudo`):
   -dynamiclib \
   -install_name @rpath/libexpat.1.dylib \
   -Wl,-reexport_library,/usr/lib/libexpat.1.dylib \
-  -o /tmp/libexpat.1.dylib
+  -o "$TMP_DYLIB"
 
 # 2. Pseudo-sign with ldid
-/var/jb/usr/bin/ldid -S /tmp/libexpat.1.dylib
+/var/jb/usr/bin/ldid -S "$TMP_DYLIB"
 
 # 3. Install into Procursus rootless lib directory
-cp /tmp/libexpat.1.dylib /var/jb/usr/lib/libexpat.1.dylib
+cp "$TMP_DYLIB" /var/jb/usr/lib/libexpat.1.dylib
 chmod 755 /var/jb/usr/lib/libexpat.1.dylib
 ln -sf libexpat.1.dylib /var/jb/usr/lib/libexpat.dylib
-rm -f /tmp/libexpat.1.dylib
+rm -f "$TMP_DYLIB"
 ```
 
 ---
@@ -71,8 +74,9 @@ rm -f /tmp/libexpat.1.dylib
 Verify that `git-remote-http` is able to link and run without dyld crashes:
 
 ```sh
-git clone https://github.com/lu4nn3ry/swift-git-lite.git /tmp/verify-git
-rm -rf /tmp/verify-git
+VERIFY_DIR="$(mktemp -d)"
+git clone https://github.com/lu4nn3ry/swift-git-lite.git "$VERIFY_DIR/verify-git"
+rm -rf "$VERIFY_DIR"
 ```
 
 If the clone succeeds without dyld library warnings, Git HTTPS operations are fully functional.

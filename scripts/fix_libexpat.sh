@@ -75,7 +75,22 @@ if [ ! -x "$LDID" ]; then
     LDID="$(command -v ldid || true)"
 fi
 
-TMP_DYLIB="/tmp/libexpat.1.dylib"
+# 4. Create a private temporary directory for the build artifact.
+#    A fixed path in the world-writable /tmp would let a local attacker
+#    pre-plant a symlink (CWE-59) or swap the file between compile and
+#    install (CWE-367/TOCTOU) while this script runs as root.
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fix_libexpat.XXXXXXXX")" || {
+    echo "[-] Error: could not create a secure temporary directory."
+    exit 1
+}
+chmod 700 "$TMP_DIR"
+TMP_DYLIB="$TMP_DIR/libexpat.1.dylib"
+
+cleanup() {
+    rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
 echo "[*] Compiling re-export shim dylib for arm64..."
 "$CLANG" $SDK_FLAG -target arm64-apple-ios15.0 -dynamiclib \
@@ -90,12 +105,18 @@ else
     echo "[!] Warning: ldid not found, skipping signature (install ldid if execution fails)."
 fi
 
+# 5. Safety checks before installing: the artifact must be a regular file
+#    (not a symlink) owned by the effective user (root).
+if [ ! -f "$TMP_DYLIB" ] || [ -L "$TMP_DYLIB" ] || [ ! -O "$TMP_DYLIB" ]; then
+    echo "[-] Error: temporary dylib failed safety checks (regular, root-owned file expected)."
+    exit 1
+fi
+
 echo "[*] Installing to $LIB_DIR..."
 mkdir -p "$LIB_DIR"
 cp -f "$TMP_DYLIB" "$TARGET_DYLIB"
 chmod 755 "$TARGET_DYLIB"
 ln -sf libexpat.1.dylib "$TARGET_SYMLINK"
-rm -f "$TMP_DYLIB"
 
 echo "[+] libexpat.1.dylib installed successfully!"
 echo "[*] Verifying Git HTTPS remote capability..."
